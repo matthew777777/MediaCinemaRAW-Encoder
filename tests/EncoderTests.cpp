@@ -1,7 +1,9 @@
 #include <MediaCinemaRAW/Encoder.h>
+#include <MediaCinemaRAW/ContainerWriter.h>
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <cassert>
+#include <cstdio>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -36,4 +38,13 @@ int main() {
         rejected = true;
     }
     assert(rejected);
+    {
+        mediacinemaraw::ContainerWriter writer("test.mcraw",
+            "{\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":2}}");
+        writer.writeFrame(first,1000000000LL,"{\"width\":64,\"height\":8,\"compressionType\":7}");
+        int16_t pcm[]={1,-2,3,-4}; writer.writeAudio(pcm,4,1001000000LL);
+        mediacinemaraw::GyroSample gyro[]={ {1002000000LL,0.1f,-0.2f,0.3f} };
+        writer.writeGyro(gyro,1); writer.close(); assert(writer.frameCount()==1);
+    }
+    std::remove("test.mcraw");
 }

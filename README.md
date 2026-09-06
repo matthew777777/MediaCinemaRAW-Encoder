@@ -17,6 +17,7 @@ repository or linked into the encoder library.
 - Optional 4x same-colour Bayer downscaling
 - Row-stride and final-row-without-padding support
 - ARM NEON acceleration with a portable scalar fallback
+- Version-3 container writer with embedded PCM16 audio and gyro indexes
 - No runtime dependencies beyond the C++ standard library
 
 The optional downscale mode averages four same-colour samples and is therefore
@@ -47,9 +48,8 @@ mediacinemaraw::encode(
     cropTop, cropHeight, downscale4x, encoded);
 ```
 
-The output is one encoded frame payload. Applications remain responsible for
-writing container records, JSON camera metadata, timestamps, audio, gyro data,
-and the final `.mcraw` index.
+Use `mediacinemaraw::ContainerWriter` to combine encoded frames, JSON metadata,
+timestamped PCM16 chunks, and binary gyro samples into one finalized `.mcraw` file.
 
 ## Format compatibility
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(MediaCinemaRAWEncoder VERSION 0.1.0 LANGUAGES CXX)
 
-add_library(MediaCinemaRAWEncoder src/Encoder.cpp)
+add_library(MediaCinemaRAWEncoder src/Encoder.cpp src/ContainerWriter.cpp)
 add_library(MediaCinemaRAW::Encoder ALIAS MediaCinemaRAWEncoder)
 set_target_properties(MediaCinemaRAWEncoder PROPERTIES EXPORT_NAME Encoder)
 target_compile_features(MediaCinemaRAWEncoder PUBLIC cxx_std_17)
