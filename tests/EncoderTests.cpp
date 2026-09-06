@@ -5,7 +5,10 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 int main() {
@@ -40,11 +43,21 @@ int main() {
     assert(rejected);
     {
         mediacinemaraw::ContainerWriter writer("test.mcraw",
-            "{\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":2}}");
+            "{\"manufacturer\":\"Example\",\"model\":\"Camera 1\","
+            "\"UniqueCameraModel\":\"Example Camera 1\","
+            "\"uniqueCameraModel\":\"Example Camera 1\","
+            "\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":2}}");
         writer.writeFrame(first,1000000000LL,"{\"width\":64,\"height\":8,\"compressionType\":7}");
         int16_t pcm[]={1,-2,3,-4}; writer.writeAudio(pcm,4,1001000000LL);
         mediacinemaraw::GyroSample gyro[]={ {1002000000LL,0.1f,-0.2f,0.3f} };
         writer.writeGyro(gyro,1); writer.close(); assert(writer.frameCount()==1);
+    }
+    {
+        std::ifstream input("test.mcraw", std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+        assert(bytes.find("\"UniqueCameraModel\":\"Example Camera 1\"") != std::string::npos);
+        assert(bytes.find("\"uniqueCameraModel\":\"Example Camera 1\"") != std::string::npos);
     }
     std::remove("test.mcraw");
 }

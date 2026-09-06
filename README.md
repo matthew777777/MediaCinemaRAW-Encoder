@@ -51,6 +51,12 @@ mediacinemaraw::encode(
 Use `mediacinemaraw::ContainerWriter` to combine encoded frames, JSON metadata,
 timestamped PCM16 chunks, and binary gyro samples into one finalized `.mcraw` file.
 
+Container metadata should include `UniqueCameraModel` with the actual camera
+identity (for example, `Google Pixel 8 Pro`). Exporters should copy that value
+to DNG tag 50708 instead of assigning a fixed application name. For compatibility
+with readers that follow lower-camel JSON naming, PhotonCamera also emits the
+same value as `uniqueCameraModel`.
+
 ## Format compatibility
 
 The encoder targets MediaCinemaRAW container metadata compression type `7`.
