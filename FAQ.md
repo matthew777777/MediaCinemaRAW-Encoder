@@ -22,12 +22,23 @@ PCM16 audio, and motion samples.
 The repos do not depend on each other. They are linked only by the format
 and by the external interop scripts described below.
 
-## Is this a clean-room implementation?
+## What is the relationship to `motioncam-decoder`?
 
-Yes. Both libraries were written without copying third-party decoder source.
-The separate [`motioncam-decoder`](https://github.com/mirsadm/motioncam-decoder)
-project and the sibling Encoder/Decoder checkout are used only as external
-interoperability test oracles. They are not vendored, copied, or linked in.
+**Encoder.** This is an independent **decoder-compatible encoder
+implementation**. During development, the separate
+[`motioncam-decoder`](https://github.com/mirsadm/motioncam-decoder) project
+was consulted as a reference for understanding the `.mcraw` container format,
+metadata structures, and expected decoder behavior, and was also used for
+interoperability testing. The encoder code in this repository was written
+independently and does not include or link against `motioncam-decoder`. No
+decoder source code was intentionally copied into the encoder. Because the
+reference implementation was inspected during development, however, this
+project does **not** claim to be a formal clean-room implementation.
+
+**Decoder.** The decoder was written independently and does not include or
+link against `motioncam-decoder`. The reference project and the sibling
+encoder checkout are used only as external interoperability test oracles.
+
 Both repos are `GPL-3.0-only`.
 
 ## What is compatible?
