@@ -64,6 +64,11 @@ PhotonCamera validation covers 240 deterministic combinations of RAW16,
 RAW10, crop, downscale, stride, constant blocks, and supported bit widths. Each
 payload is decoded and compared pixel-for-pixel with the reference decoder.
 
+## FAQ
+
+See [FAQ](FAQ.md) for the shared whole-project FAQ covering the encoder,
+decoder, format, troubleshooting, and DNG export notes.
+
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE).
