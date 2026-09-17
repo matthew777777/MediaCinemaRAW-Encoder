@@ -4,11 +4,18 @@ A portable C++17 encoder for the **MediaCinemaRAW** lossless RAW-frame format.
 It accepts Android RAW16 or packed RAW10 input and emits compression type 7
 frame payloads compatible with existing `.mcraw` readers.
 
-This is an independent **clean-room implementation**. It was written without
-copying decoder source code. The separate
-[`motioncam-decoder`](https://github.com/mirsadm/motioncam-decoder) project is
-used only as an interoperability test oracle and is not included in this
-repository or linked into the encoder library.
+This is an independent **decoder-compatible encoder implementation**. During
+development, the separate
+[`motioncam-decoder`](https://github.com/mirsadm/motioncam-decoder) project was
+consulted as a reference for understanding the `.mcraw` container format,
+metadata structures, and expected decoder behavior, and was also used for
+interoperability testing.
+
+The encoder code in this repository was written independently and does not
+include or link against `motioncam-decoder`. No decoder source code was
+intentionally copied into the encoder. Because the reference implementation
+was inspected during development, however, this project does **not** claim to
+be a formal clean-room implementation.
 
 ## Features
 

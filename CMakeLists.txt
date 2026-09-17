@@ -18,7 +18,7 @@ install(EXPORT MediaCinemaRAWEncoderTargets
     NAMESPACE MediaCinemaRAW::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/MediaCinemaRAWEncoder)
 
-option(MEDIACINEMARAW_BUILD_TESTS "Build clean-room codec tests" ON)
+option(MEDIACINEMARAW_BUILD_TESTS "Build codec tests" ON)
 if(MEDIACINEMARAW_BUILD_TESTS)
     enable_testing()
     add_executable(MediaCinemaRAWEncoderTests tests/EncoderTests.cpp)

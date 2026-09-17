@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace mediacinemaraw {
-// Clean-room MediaCinemaRAW encoder compatible with compression type 7 readers.
+// Independent decoder-compatible MediaCinemaRAW encoder for compression type 7 readers.
 // RAW10 is Android's four-pixel/five-byte packing.
 void encode(const uint8_t* raw, size_t size, int width, int height, int stride,
             bool raw10, int cropTop, int cropHeight, bool bin,
