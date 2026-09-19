@@ -24,7 +24,9 @@ be a formal clean-room implementation.
 - Optional 4x same-colour Bayer downscaling
 - Row-stride and final-row-without-padding support
 - ARM NEON acceleration with a portable scalar fallback
-- Version-3 container writer with embedded PCM16 audio and gyro indexes
+- Version-3 container writer with embedded PCM16 audio plus gyro and
+  accelerometer motion (gyro 8/9, accel 12/13, version 1, 24-byte samples;
+  no OIS output)
 - No runtime dependencies beyond the C++ standard library
 
 The optional downscale mode averages four same-colour samples and is therefore
@@ -44,6 +46,13 @@ To run the full interoperability suite against a separate decoder checkout:
 python3 tools/verify_compatibility.py /path/to/motioncam-decoder
 ```
 
+To verify the gyro/accelerometer container path against the upstream oracle (and,
+optionally, the sibling decoder checkout):
+
+```sh
+python3 tools/verify_gyro.py /path/to/motioncam-decoder [/path/to/MediaCinemaRAW-Decoder]
+```
+
 ## API
 
 ```cpp
@@ -56,7 +65,10 @@ mediacinemaraw::encode(
 ```
 
 Use `mediacinemaraw::ContainerWriter` to combine encoded frames, JSON metadata,
-timestamped PCM16 chunks, and binary gyro samples into one finalized `.mcraw` file.
+timestamped PCM16 chunks, and binary gyro/accelerometer samples into one
+finalized `.mcraw` file. Both motion streams are opt-in per `writeGyro()` /
+`writeAccelerometer()` call (empty calls emit nothing). Gyro axes are rad/s,
+accel axes are m/s^2 including gravity in the source platform convention.
 
 Container metadata should include `UniqueCameraModel` with the actual camera
 identity (for example, `Google Pixel 8 Pro`). Exporters should copy that value
