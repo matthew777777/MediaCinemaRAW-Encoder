@@ -94,8 +94,13 @@ void ContainerWriter::flushAccel(){
   accel_.push_back({p,pendingAccel_[0].timestampNs});pendingAccel_.clear();
 }
 void ContainerWriter::close(){if(closed_)return;closed_=true;
- flushGyro();flushAccel(); // trailing samples: the "+1" in chunks <= frames + 1
+ // Tail order is a compatibility contract: pre-gyro readers (MotionCam
+ // Tools v1.0, decoder era Jan 2026) stop their tail scan at the first
+ // motion item, so the audio index MUST precede any trailing motion data
+ // or they report no audio. Gyro-era parsers break on accelerometer
+ // items — same cure. Order-free readers don't care.
  if(!audio_.empty()){item(4,audioIndexPayload(audio_.size()));le(out_,int64_t(audio_.size()));le(out_,audio_[0].timestamp/1000000);for(auto x:audio_){le(out_,x.offset);le(out_,x.timestamp);}}
+ flushGyro();flushAccel(); // trailing samples AFTER the audio index (see above)
  if(!gyro_.empty()){item(8,motionIndexPayload(gyro_.size()));le(out_,uint32_t(1));le(out_,ck(gyro_.size()));for(auto x:gyro_){le(out_,x.offset);le(out_,x.timestamp);}}
  if(!accel_.empty()){item(12,motionIndexPayload(accel_.size()));le(out_,uint32_t(1));le(out_,ck(accel_.size()));for(auto x:accel_){le(out_,x.offset);le(out_,x.timestamp);}}
  item(1,frameIndexPayload(frames_.size()));auto index=position();for(auto x:frames_){le(out_,x.offset);le(out_,x.timestamp);}

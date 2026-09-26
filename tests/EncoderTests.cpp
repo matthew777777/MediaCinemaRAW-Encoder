@@ -315,6 +315,8 @@ int main() {
         mediacinemaraw::AccelerometerSample at{sts, 0, 0, 0};
         writer.writeGyro(&gt, 1);
         writer.writeAccelerometer(&at, 1);
+        int16_t tail[] = {7, -7};
+        writer.writeAudio(tail, 2, t0 + 4 * 33333333LL);
         writer.close();
         assert(writer.frameCount() == 5);
     }
@@ -325,7 +327,11 @@ int main() {
         const auto items = scanItems(bytes);
         int gyroData = 0, accelData = 0;
         size_t gyroSamples = 0, accelSamples = 0;
+        size_t audioIndexAt = 0, lastFrameAt = 0;
+        bool sawAudioIndex = false;
         for (const auto& it : items) {
+            const size_t head = it.payload - 8;
+            if (it.type == 2) lastFrameAt = head;
             if (it.type == 9) {
                 ++gyroData;
                 assert(loadU32(bytes, it.payload) == 1);
@@ -334,6 +340,9 @@ int main() {
                 ++accelData;
                 assert(loadU32(bytes, it.payload) == 1);
                 accelSamples += loadU32(bytes, it.payload + 4);
+            } else if (it.type == 4) {
+                sawAudioIndex = true;
+                audioIndexAt = head;
             } else if (it.type == 8 || it.type == 12) {
                 assert(loadU32(bytes, it.payload) == 1);
                 assert(loadU32(bytes, it.payload + 4) == 6);
@@ -343,6 +352,16 @@ int main() {
         assert(gyroData == 6 && accelData == 6);
         assert(gyroSamples == 5 * 50 * 7 + 1);
         assert(accelSamples == 5 * 50 * 7 + 1);
+        // Tail order: pre-gyro readers (MotionCam Tools v1.0) stop their
+        // scan at the first motion item, so no motion data may sit between
+        // the last frame and the audio index.
+        assert(sawAudioIndex);
+        for (const auto& it : items) {
+            if (it.type == 9 || it.type == 13) {
+                const size_t head = it.payload - 8;
+                assert(head < lastFrameAt || head > audioIndexAt);
+            }
+        }
     }
     std::remove("test.mcraw");
 }
