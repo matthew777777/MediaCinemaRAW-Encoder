@@ -174,7 +174,9 @@ int main() {
     }
     std::remove("test.mcraw");
 
-    // Full motion container: gyro 2 chunks (3 + 1), accel 2 chunks (2 + 1).
+    // Full motion container: writes coalesce — 1 gyro chunk (3 + 1),
+    // 1 accel chunk (2 + 1). motioncam-decoder rejects files with more
+    // motion chunks than frames + 1, so per-call chunks are not emitted.
     {
         mediacinemaraw::ContainerWriter writer("test.mcraw",
             "{\"manufacturer\":\"Example\",\"model\":\"Camera 1\","
@@ -241,12 +243,11 @@ int main() {
                 ++gyroData;
             } else if (it.type == 8) {
                 ++gyroIndex;
-                assert(it.size == 8 + 2 * 16);  // 2 chunks, empty call emitted nothing
+                assert(it.size == 8 + 1 * 16);  // coalesced, empty call emitted nothing
                 assert(loadU32(bytes, it.payload) == 1);
-                assert(loadU32(bytes, it.payload + 4) == 2);
-                // Index timestamps are the first sample of each chunk.
+                assert(loadU32(bytes, it.payload + 4) == 1);
+                // Index timestamp is the first sample of the chunk.
                 assert(loadI64(bytes, it.payload + 8 + 8) == 1002000000LL);
-                assert(loadI64(bytes, it.payload + 24 + 8) == 1005000000LL);
             } else if (it.type == 13) {
                 assert(accelData < 2);
                 accelPayloads[accelData] = it.payload;
@@ -257,36 +258,91 @@ int main() {
                 ++accelData;
             } else if (it.type == 12) {
                 ++accelIndex;
-                assert(it.size == 8 + 2 * 16);
+                assert(it.size == 8 + 1 * 16);
                 assert(loadU32(bytes, it.payload) == 1);
-                assert(loadU32(bytes, it.payload + 4) == 2);
+                assert(loadU32(bytes, it.payload + 4) == 1);
                 assert(loadI64(bytes, it.payload + 8 + 8) == 1002500000LL);
-                assert(loadI64(bytes, it.payload + 24 + 8) == 1005500000LL);
             }
         }
-        assert(gyroData == 2 && gyroIndex == 1);
-        assert(accelData == 2 && accelIndex == 1);
-        assert(dataCounts[0] == 3 && dataCounts[1] == 1);
-        assert(accelCounts[0] == 2 && accelCounts[1] == 1);
-        // Sample bytes: timestamp + axes + reserved == 0.
+        assert(gyroData == 1 && gyroIndex == 1);
+        assert(accelData == 1 && accelIndex == 1);
+        assert(dataCounts[0] == 4);
+        assert(accelCounts[0] == 3);
+        // Sample bytes: timestamp + axes + reserved == 0, in call order.
         assert(loadI64(bytes, dataPayloads[0] + 8) == 1002000000LL);
         assert(loadF32(bytes, dataPayloads[0] + 16) == 0.1f);
         assert(loadU32(bytes, dataPayloads[0] + 28) == 0);
         assert(loadI64(bytes, dataPayloads[0] + 8 + 24) == 1003000000LL);
         assert(loadI64(bytes, dataPayloads[0] + 8 + 48) == 1004000000LL);
         assert(loadF32(bytes, dataPayloads[0] + 8 + 48 + 16) == 9.81f);
-        assert(loadI64(bytes, dataPayloads[1] + 8) == 1005000000LL);
-        assert(loadF32(bytes, dataPayloads[1] + 16) == 4.0f);
-        assert(loadU32(bytes, dataPayloads[1] + 28) == 0);
+        assert(loadI64(bytes, dataPayloads[0] + 8 + 72) == 1005000000LL);
+        assert(loadF32(bytes, dataPayloads[0] + 8 + 72 + 8) == 4.0f);
+        assert(loadU32(bytes, dataPayloads[0] + 8 + 72 + 20) == 0);
         // Accelerometer bytes share the 24-byte MotionSample layout.
         assert(loadI64(bytes, accelPayloads[0] + 8) == 1002500000LL);
         assert(loadF32(bytes, accelPayloads[0] + 16) == 0.0f);
         assert(loadF32(bytes, accelPayloads[0] + 20) == 9.81f);
         assert(loadU32(bytes, accelPayloads[0] + 28) == 0);
         assert(loadI64(bytes, accelPayloads[0] + 8 + 24) == 1003500000LL);
-        assert(loadI64(bytes, accelPayloads[1] + 8) == 1005500000LL);
-        assert(loadF32(bytes, accelPayloads[1] + 16) == 0.5f);
-        assert(loadU32(bytes, accelPayloads[1] + 28) == 0);
+        assert(loadI64(bytes, accelPayloads[0] + 8 + 48) == 1005500000LL);
+        assert(loadF32(bytes, accelPayloads[0] + 8 + 48 + 8) == 0.5f);
+        assert(loadU32(bytes, accelPayloads[0] + 8 + 48 + 20) == 0);
+    }
+    std::remove("test.mcraw");
+
+    // Per-frame coalescing: 251 tiny drains per sensor collapse to
+    // frames + 1 chunks, so motioncam-decoder always opens the file.
+    {
+        mediacinemaraw::ContainerWriter writer("test.mcraw", "{}");
+        const int64_t t0 = 2000000000LL;
+        int64_t sts = t0;
+        for (int f = 0; f < 5; ++f) {
+            for (int d = 0; d < 50; ++d) {
+                mediacinemaraw::GyroSample g[7];
+                mediacinemaraw::AccelerometerSample a[7];
+                for (int i = 0; i < 7; ++i) {
+                    g[i] = {sts, 0.1f, -0.2f, 0.3f};
+                    a[i] = {sts, 1.0f, 2.0f, 9.8f};
+                    sts += 2000000LL;  // 500 Hz
+                }
+                writer.writeGyro(g, 7);
+                writer.writeAccelerometer(a, 7);
+            }
+            writer.writeFrame(first, t0 + (int64_t)f * 33333333LL,
+                              "{\"width\":64,\"height\":8,\"compressionType\":7}");
+        }
+        mediacinemaraw::GyroSample gt{sts, 0, 0, 0};
+        mediacinemaraw::AccelerometerSample at{sts, 0, 0, 0};
+        writer.writeGyro(&gt, 1);
+        writer.writeAccelerometer(&at, 1);
+        writer.close();
+        assert(writer.frameCount() == 5);
+    }
+    {
+        std::ifstream input("test.mcraw", std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+        const auto items = scanItems(bytes);
+        int gyroData = 0, accelData = 0;
+        size_t gyroSamples = 0, accelSamples = 0;
+        for (const auto& it : items) {
+            if (it.type == 9) {
+                ++gyroData;
+                assert(loadU32(bytes, it.payload) == 1);
+                gyroSamples += loadU32(bytes, it.payload + 4);
+            } else if (it.type == 13) {
+                ++accelData;
+                assert(loadU32(bytes, it.payload) == 1);
+                accelSamples += loadU32(bytes, it.payload + 4);
+            } else if (it.type == 8 || it.type == 12) {
+                assert(loadU32(bytes, it.payload) == 1);
+                assert(loadU32(bytes, it.payload + 4) == 6);
+                assert(it.size == 8 + 6 * 16);
+            }
+        }
+        assert(gyroData == 6 && accelData == 6);
+        assert(gyroSamples == 5 * 50 * 7 + 1);
+        assert(accelSamples == 5 * 50 * 7 + 1);
     }
     std::remove("test.mcraw");
 }

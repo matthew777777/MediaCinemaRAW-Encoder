@@ -24,19 +24,29 @@ public:
   // Throws std::logic_error if closed, std::invalid_argument on null samples
   // with n > 0, std::length_error if the item payload would exceed u32.
   void writeAudio(const int16_t*,size_t,int64_t);
-  // Gyro. Empty calls (n == 0) are a no-op and emit no index entry.
-  // Otherwise the chunk index timestamp is s[0].timestampNs; callers should
-  // emit chunks in timestamp order on the same ns timeline as frames so both
-  // motioncam-decoder and sibling ContainerReader discover them after the
-  // last frame. Throws like writeAudio above.
+  // Gyro. Samples are buffered and coalesced, NOT written per call: each
+  // accepted writeFrame flushes at most one pending chunk ahead of the
+  // frame, close() flushes the remainder, so gyro chunks <= frames + 1 for
+  // any call cadence. motioncam-decoder rejects files with more motion
+  // chunks than frames + 1 ("Invalid gyro index" aborts the whole open,
+  // hiding audio too), while sensor recorders drain ~100x/s — coalescing
+  // keeps every take openable. Empty calls (n == 0) are a no-op and emit no
+  // index entry. Otherwise the chunk index timestamp is the first buffered
+  // sample's timestampNs; callers should emit samples in timestamp order on
+  // the same ns timeline as frames so both motioncam-decoder and sibling
+  // ContainerReader discover them after the last frame. Throws like
+  // writeAudio above.
   void writeGyro(const GyroSample*,size_t);
-  // Accelerometer. Same contract as writeGyro but item types 12 (index) /
-  // 13 (data); values are m/s^2 including gravity, platform axes preserved.
+  // Accelerometer. Same coalescing contract as writeGyro but item types 12
+  // (index) / 13 (data); values are m/s^2 including gravity, platform axes
+  // preserved.
   void writeAccelerometer(const AccelerometerSample*,size_t);
   void close(); size_t frameCount() const noexcept{return frames_.size();}
 private:
   struct Offset{int64_t offset,timestamp;}; std::ofstream out_;
   std::vector<Offset> frames_,audio_,gyro_,accel_; bool closed_=false;
+  std::vector<GyroSample> pendingGyro_; std::vector<AccelerometerSample> pendingAccel_;
   void item(uint32_t,uint32_t); void bytes(const void*,size_t); int64_t position();
+  void flushGyro(); void flushAccel(); // at most one chunk; no-op when empty
 };
 }

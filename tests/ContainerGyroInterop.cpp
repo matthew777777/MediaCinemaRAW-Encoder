@@ -99,5 +99,52 @@ int main(int argc, char** argv) {
     }
 
     std::printf("upstream gyro+accel interop passed (4 gyro, 3 accel)\n");
+
+    // Many tiny drains (sensor recorders drain ~100x/s) must coalesce to
+    // <= frames + 1 chunks: the upstream reader rejects more with
+    // "Invalid gyro index", aborting the whole open.
+    const std::string many = "gyro_interop_many.mcraw";
+    int64_t sensorTs = 2000000000LL;
+    {
+        mediacinemaraw::ContainerWriter writer(many, "{}");
+        for (int f = 0; f < 5; ++f) {
+            for (int d = 0; d < 50; ++d) {
+                mediacinemaraw::GyroSample g[7];
+                mediacinemaraw::AccelerometerSample a[7];
+                for (int i = 0; i < 7; ++i) {
+                    g[i] = {sensorTs, 0.1f, -0.2f, 0.3f};
+                    a[i] = {sensorTs, 1.0f, 2.0f, 9.8f};
+                    sensorTs += 2000000LL;  // 500 Hz
+                }
+                writer.writeGyro(g, 7);
+                writer.writeAccelerometer(a, 7);
+            }
+            writer.writeFrame(blob, 2000000000LL + int64_t(f) * 33333333LL,
+                              "{\"width\":64,\"height\":8,\"compressionType\":7}");
+        }
+        mediacinemaraw::GyroSample tail{0, 0, 0, 0};
+        tail.timestampNs = sensorTs;
+        writer.writeGyro(&tail, 1);
+        mediacinemaraw::AccelerometerSample tailA{0, 0, 0, 0};
+        tailA.timestampNs = sensorTs;
+        writer.writeAccelerometer(&tailA, 1);
+        writer.close();
+    }
+    motioncam::Decoder crowded(many);
+    assert(crowded.getFrames().size() == 5);
+    std::vector<motioncam::MotionSample> cg, ca;
+    crowded.loadGyroData(cg);
+    crowded.loadAccelerometerData(ca);
+    assert(cg.size() == 5 * 50 * 7 + 1);
+    assert(ca.size() == 5 * 50 * 7 + 1);
+    assert(cg.front().timestampNs == 2000000000LL);
+    assert(cg.back().timestampNs == sensorTs);
+    assert(ca.front().timestampNs == 2000000000LL);
+    assert(ca.back().timestampNs == sensorTs);
+    for (size_t i = 1; i < cg.size(); ++i)
+        assert(cg[i].timestampNs >= cg[i - 1].timestampNs);
+    std::remove(many.c_str());
+
+    std::printf("upstream crowded-motion interop passed (1751 + 1751)\n");
     return 0;
 }

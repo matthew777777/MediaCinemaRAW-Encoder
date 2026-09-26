@@ -66,9 +66,12 @@ mediacinemaraw::encode(
 
 Use `mediacinemaraw::ContainerWriter` to combine encoded frames, JSON metadata,
 timestamped PCM16 chunks, and binary gyro/accelerometer samples into one
-finalized `.mcraw` file. Both motion streams are opt-in per `writeGyro()` /
-`writeAccelerometer()` call (empty calls emit nothing). Gyro axes are rad/s,
-accel axes are m/s^2 including gravity in the source platform convention.
+finalized `.mcraw` file. Both motion streams are opt-in via `writeGyro()` /
+`writeAccelerometer()` (empty calls emit nothing); samples are buffered and
+coalesced to at most one chunk per sensor per frame plus a trailing chunk at
+`close()`, because motioncam-decoder rejects files with more motion chunks
+than frames + 1. Gyro axes are rad/s, accel axes are m/s^2 including gravity
+in the source platform convention.
 
 Container metadata should include `UniqueCameraModel` with the actual camera
 identity (for example, `Google Pixel 8 Pro`). Exporters should copy that value
