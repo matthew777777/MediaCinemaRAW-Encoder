@@ -47,6 +47,12 @@ struct ItemRef {
     size_t payload;
 };
 
+uint64_t fnv1aBytes(const std::string& b) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint8_t c : b) { h ^= c; h *= 1099511628211ull; }
+    return h;
+}
+
 std::vector<ItemRef> scanItems(const std::string& bytes) {
     // Skip 8-byte header + container metadata item.
     assert(bytes.size() > 8);
@@ -287,8 +293,164 @@ int main() {
         assert(loadI64(bytes, accelPayloads[0] + 8 + 48) == 1005500000LL);
         assert(loadF32(bytes, accelPayloads[0] + 8 + 48 + 8) == 0.5f);
         assert(loadU32(bytes, accelPayloads[0] + 8 + 48 + 20) == 0);
+        // Whole-file golden: ContainerWriter I/O must stay byte-identical.
+        assert(bytes.size() == 1794);
+        assert(fnv1aBytes(bytes) == 0xa5a60214c0d84237ULL);
     }
     std::remove("test.mcraw");
+
+    // Padded-width clamp (#1) + bit-identical fast paths (#2).
+    // NOTE: in-range metadata tail padding was tried and reverted: deployed
+    // readers validate zero padding, so metadata() keeps zero tails and
+    // these goldens pin that wire convention.
+    {
+        auto u32le = [](const std::vector<uint8_t>& v, size_t p) -> uint32_t {
+            assert(p + 4 <= v.size());
+            return uint32_t(v[p]) | (uint32_t(v[p + 1]) << 8) |
+                   (uint32_t(v[p + 2]) << 16) | (uint32_t(v[p + 3]) << 24);
+        };
+        auto fnv1a = [](const std::vector<uint8_t>& v) -> uint64_t {
+            uint64_t h = 1469598103934665603ull;
+            for (uint8_t b : v) { h ^= b; h *= 1099511628211ull; }
+            return h;
+        };
+        // Golden: 64x8 pattern has no padding (ew == w), so #1 cannot
+        // affect it; #2 must be bit-identical to the pre-change bytes.
+        assert(first.size() == 1156);
+        assert(fnv1a(first) == 0xa0ca7970d54a27fdULL);
+
+        // Padded: 66x4 constant 3000 (ew = 128). Zero padding used to
+        // drag tile channels to lo=0/hi=3000 (16-bit, 708 bytes); the
+        // clamp keeps padded samples at the visible lo so every channel
+        // is bits=0 and the tile payload is empty.
+        constexpr int wB = 66, hB = 4, sB = wB * 2;
+        std::vector<uint8_t> rawB(hB * sB, 0);
+        for (int y = 0; y < hB; ++y)
+            for (int x = 0; x < wB; ++x) {
+                rawB[y * sB + x * 2] = uint8_t(3000);
+                rawB[y * sB + x * 2 + 1] = uint8_t(3000 >> 8);
+            }
+        std::vector<uint8_t> outB1, outB2;
+        mediacinemaraw::encode(rawB.data(), rawB.size(), wB, hB, sB,
+                               false, 0, hB, false, outB1);
+        mediacinemaraw::encode(rawB.data(), rawB.size(), wB, hB, sB,
+                               false, 0, hB, false, outB2);
+        assert(outB1 == outB2);
+        // Buffer reuse: encoding into the same vector must match fresh.
+        mediacinemaraw::encode(rawB.data(), rawB.size(), wB, hB, sB,
+                               false, 0, hB, false, outB1);
+        assert(outB1 == outB2);
+        assert(u32le(outB1, 0) == 128);  // ew preserved
+        assert(u32le(outB1, 4) == 4);    // h preserved
+        assert(u32le(outB1, 8) == 16);   // off1: zero tile payload
+        // Was 708 before the clamp; the refs tail keeps zero padding.
+        assert(outB1.size() == 156);
+        assert(fnv1a(outB1) == 0x907450a98cf63d41ULL);
+
+        // Golden: 64x4 constant 3000, no padding, bit-identical through #2.
+        constexpr int wC = 64, hC = 4, sC = wC * 2;
+        std::vector<uint8_t> rawC(hC * sC, 0);
+        for (int y = 0; y < hC; ++y)
+            for (int x = 0; x < wC; ++x) {
+                rawC[y * sC + x * 2] = uint8_t(3000);
+                rawC[y * sC + x * 2 + 1] = uint8_t(3000 >> 8);
+            }
+        std::vector<uint8_t> outC;
+        mediacinemaraw::encode(rawC.data(), rawC.size(), wC, hC, sC,
+                               false, 0, hC, false, outC);
+        assert(outC.size() == 156);
+        assert(fnv1a(outC) == 0x6f46729dbbcc0211ULL);
+    }
+
+    // encode_parallel() must be byte-identical to encode() for any thread
+    // count, across RAW16/RAW10, bin, stride slack, and partial edge tiles
+    // (band splits must not disturb tile order or the padding clamp).
+    {
+        auto xorshift = [](uint32_t& s) -> uint16_t {
+            s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+            return uint16_t(s >> 7);
+        };
+        auto check = [&](int width, int height, int slack, bool raw10,
+                         int cropTop, int cropHeight, bool bin) {
+            const size_t rb = raw10 ? size_t(width)/4*5 : size_t(width)*2;
+            const int stride = int(rb) + slack;
+            std::vector<uint8_t> raw(size_t(height-1)*stride + rb, 0);
+            uint32_t st = 0x243F6A89u;
+            for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+                uint16_t v = xorshift(st);
+                if (raw10) v %= 1024;
+                if (raw10) {
+                    raw[y*stride+x/4*5+x%4] = uint8_t(v>>2);
+                    if (x%4 == 0) raw[y*stride+x/4*5+4] = 0;
+                    raw[y*stride+x/4*5+4] = uint8_t(raw[y*stride+x/4*5+4] | ((v&3) << (2*(x%4))));
+                } else {
+                    raw[y*stride+x*2] = uint8_t(v); raw[y*stride+x*2+1] = uint8_t(v>>8);
+                }
+            }
+            std::vector<uint8_t> serial, par;
+            mediacinemaraw::encode(raw.data(), raw.size(), width, height, stride,
+                                   raw10, cropTop, cropHeight, bin, serial);
+            for (unsigned t : {0u, 1u, 2u, 3u, 7u}) {
+                mediacinemaraw::encode_parallel(raw.data(), raw.size(), width, height, stride,
+                                                raw10, cropTop, cropHeight, bin, par, t);
+                assert(par == serial);
+            }
+            // Repeated parallel calls are deterministic.
+            std::vector<uint8_t> par2;
+            mediacinemaraw::encode_parallel(raw.data(), raw.size(), width, height, stride,
+                                            raw10, cropTop, cropHeight, bin, par2, 0);
+            assert(par2 == serial);
+        };
+        check(64, 8, 16, false, 0, 8, false);    // full tiles, slack stride
+        check(68, 12, 0, false, 0, 12, false);   // partial tiles, 3 bands vs 7 workers
+        check(68, 16, 8, true, 2, 12, false);    // RAW10, crop, partial
+        check(128, 8, 4, false, 0, 8, true);     // bin, 1 band (serial fallback)
+        check(260, 24, 24, true, 0, 24, false);  // RAW10 wide, many bands
+        // Error parity: same geometry rejection before any thread spawns.
+        std::vector<uint8_t> tiny(64, 0), tmp;
+        for (int bad = 0; bad < 2; ++bad) {
+            bool s = false, p = false;
+            try { mediacinemaraw::encode(tiny.data(), tiny.size(), 64, 8, bad ? 10 : 128,
+                                         false, bad ? 0 : 1, 8, false, tmp); }
+            catch (const std::invalid_argument&) { s = true; }
+            try { mediacinemaraw::encode_parallel(tiny.data(), tiny.size(), 64, 8, bad ? 10 : 128,
+                                                  false, bad ? 0 : 1, 8, false, tmp, 4); }
+            catch (const std::invalid_argument&) { p = true; }
+            assert(s && p);
+        }
+    }
+
+    // Convenience overload: full-frame lossless, identical to the
+    // 10-argument form with cropTop = 0, cropHeight = height, bin = false.
+    {
+        constexpr int wO = 68, hO = 12, sO = wO * 2 + 8;
+        std::vector<uint8_t> rawO((hO - 1) * sO + wO * 2, 0);
+        for (int y = 0; y < hO; ++y)
+            for (int x = 0; x < wO; ++x) {
+                const uint16_t v = static_cast<uint16_t>((x * 257 + y * 13) & 8191);
+                rawO[y * sO + x * 2] = static_cast<uint8_t>(v);
+                rawO[y * sO + x * 2 + 1] = static_cast<uint8_t>(v >> 8);
+            }
+        std::vector<uint8_t> full, easy;
+        mediacinemaraw::encode(rawO.data(), rawO.size(), wO, hO, sO,
+                               false, 0, hO, false, full);
+        mediacinemaraw::encode(rawO.data(), rawO.size(), wO, hO, sO, easy);
+        assert(easy == full);
+        constexpr int wR = 64, hR = 8, sR = wR / 4 * 5;
+        std::vector<uint8_t> rawR(hR * sR, 0);
+        for (int y = 0; y < hR; ++y)
+            for (int x = 0; x < wR; ++x) {
+                const uint16_t v = static_cast<uint16_t>((x * 31 + y * 7) & 1023);
+                rawR[y * sR + x / 4 * 5 + x % 4] = static_cast<uint8_t>(v >> 2);
+                if (x % 4 == 0) rawR[y * sR + x / 4 * 5 + 4] = 0;
+                rawR[y * sR + x / 4 * 5 + 4] =
+                    static_cast<uint8_t>(rawR[y * sR + x / 4 * 5 + 4] | ((v & 3) << (2 * (x % 4))));
+            }
+        mediacinemaraw::encode(rawR.data(), rawR.size(), wR, hR, sR,
+                               true, 0, hR, false, full);
+        mediacinemaraw::encode(rawR.data(), rawR.size(), wR, hR, sR, easy, true);
+        assert(easy == full);
+    }
 
     // Per-frame coalescing: 251 tiny drains per sensor collapse to
     // frames + 1 chunks, so motioncam-decoder always opens the file.
@@ -362,6 +524,9 @@ int main() {
                 assert(head < lastFrameAt || head > audioIndexAt);
             }
         }
+        // Whole-file golden: coalesced multi-chunk layout must stay identical.
+        assert(bytes.size() == 90737);
+        assert(fnv1aBytes(bytes) == 0xf9edabacf5cbe5bcULL);
     }
     std::remove("test.mcraw");
 }

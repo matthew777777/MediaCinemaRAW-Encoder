@@ -23,7 +23,8 @@ be a formal clean-room implementation.
 - Even-row cropping that preserves Bayer CFA phase
 - Optional 4x same-colour Bayer downscaling
 - Row-stride and final-row-without-padding support
-- ARM NEON acceleration with a portable scalar fallback
+- ARM NEON and x86 SSE2 acceleration with a portable scalar fallback,
+  plus an opt-in byte-identical multithreaded entry point
 - Version-3 container writer with embedded PCM16 audio plus gyro and
   accelerometer motion (gyro 8/9, accel 12/13, version 1, 24-byte samples;
   no OIS output)
@@ -59,9 +60,16 @@ python3 tools/verify_gyro.py /path/to/motioncam-decoder [/path/to/MediaCinemaRAW
 #include <MediaCinemaRAW/Encoder.h>
 
 std::vector<uint8_t> encoded;
+// Full-frame lossless shorthand (cropTop = 0, cropHeight = height, no binning).
+mediacinemaraw::encode(rawBytes, rawByteCount, width, height, rowStride, encoded);
+// Cropping / 4x downscaling form; binning averages same-colour samples (lossy).
 mediacinemaraw::encode(
     rawBytes, rawByteCount, width, height, rowStride, isPackedRaw10,
     cropTop, cropHeight, downscale4x, encoded);
+// Byte-identical multithreaded form; threads == 0 selects the core count.
+mediacinemaraw::encode_parallel(
+    rawBytes, rawByteCount, width, height, rowStride, isPackedRaw10,
+    cropTop, cropHeight, downscale4x, encoded, 0);
 ```
 
 Use `mediacinemaraw::ContainerWriter` to combine encoded frames, JSON metadata,

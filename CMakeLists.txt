@@ -10,6 +10,9 @@ target_include_directories(MediaCinemaRAWEncoder
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>)
+# encode_parallel() uses std::thread; PUBLIC so static-link consumers inherit it.
+find_package(Threads REQUIRED)
+target_link_libraries(MediaCinemaRAWEncoder PUBLIC Threads::Threads)
 
 include(GNUInstallDirs)
 install(TARGETS MediaCinemaRAWEncoder EXPORT MediaCinemaRAWEncoderTargets)
@@ -23,5 +26,12 @@ if(MEDIACINEMARAW_BUILD_TESTS)
     enable_testing()
     add_executable(MediaCinemaRAWEncoderTests tests/EncoderTests.cpp)
     target_link_libraries(MediaCinemaRAWEncoderTests PRIVATE MediaCinemaRAW::Encoder)
+    # The suite is assert()-based, but Release/RelWithDebInfo builds define
+    # NDEBUG, which would silently compile every check out. Target options
+    # come after the config flags on the command line, so this -U wins and
+    # ctest actually tests. PRIVATE: the library itself keeps NDEBUG.
+    target_compile_options(MediaCinemaRAWEncoderTests PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
     add_test(NAME encoder_validation COMMAND MediaCinemaRAWEncoderTests)
 endif()

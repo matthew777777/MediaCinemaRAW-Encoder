@@ -1,10 +1,14 @@
 #include <MediaCinemaRAW/ContainerWriter.h>
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 namespace mediacinemaraw { namespace {
-template<class T> void le(std::ofstream& o,T v){for(size_t i=0;i<sizeof(T);i++)o.put(char(uint64_t(v)>>(8*i)));}
-void lef(std::ofstream&o,float v){uint32_t n;std::memcpy(&n,&v,4);le(o,n);}
+// Buffered little-endian assembly: sample loops append to a vector and flush
+// with one write() instead of a put() per byte. Same bytes, same order.
+template<class T> void putLe(std::vector<uint8_t>& b,T v){for(size_t i=0;i<sizeof(T);i++)b.push_back(uint8_t(uint64_t(v)>>(8*i)));}
+void putLeF(std::vector<uint8_t>& b,float v){uint32_t n;std::memcpy(&n,&v,4);putLe(b,n);}
 uint32_t ck(size_t n){if(n>UINT32_MAX)throw std::length_error("item too large");return uint32_t(n);}
 // Checked payload sizes: validate before any narrowing or multiplication.
 uint32_t audioPayload(size_t n){
@@ -48,7 +52,11 @@ int64_t ContainerWriter::position(){
   return int64_t(p);
 }
 void ContainerWriter::bytes(const void*p,size_t n){if(!n)return;out_.write((const char*)p,n);if(!out_)throw std::runtime_error("write failed");}
-void ContainerWriter::item(uint32_t t,uint32_t n){le(out_,t);le(out_,n);}
+void ContainerWriter::item(uint32_t t,uint32_t n){
+  uint8_t h[8];
+  for(int i=0;i<4;i++){h[i]=uint8_t(t>>(8*i));h[4+i]=uint8_t(n>>(8*i));}
+  bytes(h,8);
+}
 void ContainerWriter::writeFrame(const std::vector<uint8_t>&d,int64_t ts,const std::string&m){
  if(closed_)throw std::logic_error("closed");if(!frames_.empty()&&ts<=frames_.back().timestamp)throw std::invalid_argument("timestamp");
  // Motion coalescing (see header): at most one pending chunk per sensor
@@ -61,7 +69,16 @@ void ContainerWriter::writeAudio(const int16_t*s,size_t n,int64_t ts){
   if(closed_)throw std::logic_error("closed");
   if(n>0&&s==nullptr)throw std::invalid_argument("null audio samples");
   const uint32_t payload=audioPayload(n);
-  auto p=position();item(5,payload);for(size_t i=0;i<n;i++)le(out_,uint16_t(s[i]));item(6,8);le(out_,ts);audio_.push_back({p,ts});
+  auto p=position();item(5,payload);
+  // Chunked: n is bounded only by u32, so never buffer the whole payload.
+  std::vector<uint8_t> b;b.reserve(16384);
+  for(size_t i=0;i<n;){
+    b.clear();
+    const size_t m=std::min(n-i,size_t(8192));
+    for(size_t j=0;j<m;j++){const uint16_t v=uint16_t(s[i+j]);b.push_back(uint8_t(v));b.push_back(uint8_t(v>>8));}
+    bytes(b.data(),b.size());i+=m;
+  }
+  item(6,8);b.clear();putLe(b,ts);bytes(b.data(),b.size());audio_.push_back({p,ts});
 }
 void ContainerWriter::writeGyro(const GyroSample*s,size_t n){
   if(closed_)throw std::logic_error("closed");
@@ -82,15 +99,31 @@ void ContainerWriter::writeAccelerometer(const AccelerometerSample*s,size_t n){
 void ContainerWriter::flushGyro(){
   if(pendingGyro_.empty())return;
   const uint32_t payload=gyroPayload(pendingGyro_.size());
-  auto p=position();item(9,payload);le(out_,uint32_t(1));le(out_,ck(pendingGyro_.size()));
-  for(auto&s:pendingGyro_){le(out_,s.timestampNs);lef(out_,s.x);lef(out_,s.y);lef(out_,s.z);le(out_,uint32_t(0));}
+  auto p=position();item(9,payload);
+  std::vector<uint8_t> b;b.reserve(8);putLe(b,uint32_t(1));putLe(b,ck(pendingGyro_.size()));bytes(b.data(),b.size());
+  // Chunked to ~96 KiB so the backstop case (1M samples, no frames) cannot
+  // spike transient memory the way one 24 MB buffer would.
+  b.reserve(4096*24);
+  for(size_t i=0;i<pendingGyro_.size();){
+    b.clear();
+    const size_t m=std::min(pendingGyro_.size()-i,size_t(4096));
+    for(size_t j=0;j<m;j++){const auto&s=pendingGyro_[i+j];putLe(b,s.timestampNs);putLeF(b,s.x);putLeF(b,s.y);putLeF(b,s.z);putLe(b,uint32_t(0));}
+    bytes(b.data(),b.size());i+=m;
+  }
   gyro_.push_back({p,pendingGyro_[0].timestampNs});pendingGyro_.clear();
 }
 void ContainerWriter::flushAccel(){
   if(pendingAccel_.empty())return;
   const uint32_t payload=accelPayload(pendingAccel_.size());
-  auto p=position();item(13,payload);le(out_,uint32_t(1));le(out_,ck(pendingAccel_.size()));
-  for(auto&s:pendingAccel_){le(out_,s.timestampNs);lef(out_,s.x);lef(out_,s.y);lef(out_,s.z);le(out_,uint32_t(0));}
+  auto p=position();item(13,payload);
+  std::vector<uint8_t> b;b.reserve(8);putLe(b,uint32_t(1));putLe(b,ck(pendingAccel_.size()));bytes(b.data(),b.size());
+  b.reserve(4096*24);
+  for(size_t i=0;i<pendingAccel_.size();){
+    b.clear();
+    const size_t m=std::min(pendingAccel_.size()-i,size_t(4096));
+    for(size_t j=0;j<m;j++){const auto&s=pendingAccel_[i+j];putLe(b,s.timestampNs);putLeF(b,s.x);putLeF(b,s.y);putLeF(b,s.z);putLe(b,uint32_t(0));}
+    bytes(b.data(),b.size());i+=m;
+  }
   accel_.push_back({p,pendingAccel_[0].timestampNs});pendingAccel_.clear();
 }
 void ContainerWriter::close(){if(closed_)return;closed_=true;
@@ -99,10 +132,13 @@ void ContainerWriter::close(){if(closed_)return;closed_=true;
  // motion item, so the audio index MUST precede any trailing motion data
  // or they report no audio. Gyro-era parsers break on accelerometer
  // items — same cure. Order-free readers don't care.
- if(!audio_.empty()){item(4,audioIndexPayload(audio_.size()));le(out_,int64_t(audio_.size()));le(out_,audio_[0].timestamp/1000000);for(auto x:audio_){le(out_,x.offset);le(out_,x.timestamp);}}
+ // Index sections are buffered whole: their entry counts already live in
+ // memory (frames_/audio_/gyro_/accel_), so this adds no order of magnitude.
+ std::vector<uint8_t> b;
+ if(!audio_.empty()){item(4,audioIndexPayload(audio_.size()));b.clear();b.reserve(16+audio_.size()*16);putLe(b,int64_t(audio_.size()));putLe(b,audio_[0].timestamp/1000000);for(auto x:audio_){putLe(b,x.offset);putLe(b,x.timestamp);}bytes(b.data(),b.size());}
  flushGyro();flushAccel(); // trailing samples AFTER the audio index (see above)
- if(!gyro_.empty()){item(8,motionIndexPayload(gyro_.size()));le(out_,uint32_t(1));le(out_,ck(gyro_.size()));for(auto x:gyro_){le(out_,x.offset);le(out_,x.timestamp);}}
- if(!accel_.empty()){item(12,motionIndexPayload(accel_.size()));le(out_,uint32_t(1));le(out_,ck(accel_.size()));for(auto x:accel_){le(out_,x.offset);le(out_,x.timestamp);}}
- item(1,frameIndexPayload(frames_.size()));auto index=position();for(auto x:frames_){le(out_,x.offset);le(out_,x.timestamp);}
- item(0,16);le(out_,uint32_t(0x8A905612));le(out_,ck(frames_.size()));le(out_,index);out_.flush();if(!out_)throw std::runtime_error("finalize failed");out_.close();
+ if(!gyro_.empty()){item(8,motionIndexPayload(gyro_.size()));b.clear();b.reserve(8+gyro_.size()*16);putLe(b,uint32_t(1));putLe(b,ck(gyro_.size()));for(auto x:gyro_){putLe(b,x.offset);putLe(b,x.timestamp);}bytes(b.data(),b.size());}
+ if(!accel_.empty()){item(12,motionIndexPayload(accel_.size()));b.clear();b.reserve(8+accel_.size()*16);putLe(b,uint32_t(1));putLe(b,ck(accel_.size()));for(auto x:accel_){putLe(b,x.offset);putLe(b,x.timestamp);}bytes(b.data(),b.size());}
+ item(1,frameIndexPayload(frames_.size()));auto index=position();b.clear();b.reserve(frames_.size()*16);for(auto x:frames_){putLe(b,x.offset);putLe(b,x.timestamp);}bytes(b.data(),b.size());
+ item(0,16);b.clear();b.reserve(16);putLe(b,uint32_t(0x8A905612));putLe(b,ck(frames_.size()));putLe(b,index);bytes(b.data(),b.size());out_.flush();if(!out_)throw std::runtime_error("finalize failed");out_.close();
 }}
