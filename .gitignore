@@ -1,7 +1,17 @@
 /build/
+.build*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
 /.idea/
 /.vscode/
 .DS_Store
 *.o
 *.a
 *.so
+*.dylib
+# Test scratch outputs.
+test.mcraw
+gyro_interop*.mcraw

@@ -41,6 +41,10 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+Options: `MEDIACINEMARAW_BUILD_TESTS` (default ON) and
+`MEDIACINEMARAW_MOTIONCAM_DECODER_DIR` (path to a motioncam-decoder
+checkout, enables the upstream round-trip and gyro interop suites in ctest).
+
 To run the full interoperability suite against a separate decoder checkout:
 
 ```sh
@@ -86,6 +90,15 @@ identity (for example, `Google Pixel 8 Pro`). Exporters should copy that value
 to DNG tag 50708 instead of assigning a fixed application name. For compatibility
 with readers that follow lower-camel JSON naming, PhotonCamera also emits the
 same value as `uniqueCameraModel`.
+
+## Layout
+
+- `include/MediaCinemaRAW/` — public headers (`Encoder.h`, `ContainerWriter.h`)
+- `src/` — `Encoder.cpp`, `ContainerWriter.cpp`, plus private `detail/`
+  internals (SIMD helpers, bit packing, tile loop, container constants)
+- `tests/` — self-contained validation suite plus upstream interop drivers
+- `docs/` — [payload](docs/FORMAT.md) and [container](docs/CONTAINER.md) format notes
+- `tools/` — interop verification scripts (need an external decoder checkout)
 
 ## Format compatibility
 

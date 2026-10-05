@@ -1,10 +1,11 @@
-#include <MediaCinemaRAW/ContainerWriter.h>
-#include <MediaCinemaRAW/Encoder.h>
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // Upstream oracle: encoder writer -> motioncam-decoder motion APIs.
-// Built by tools/verify_gyro.py against an external motioncam-decoder checkout;
-// never vendors upstream sources.
+// Built by tools/verify_gyro.py against an external motioncam-decoder
+// checkout; never vendors upstream sources.
+#include <MediaCinemaRAW/ContainerWriter.h>
+#include <MediaCinemaRAW/Encoder.h>
+
 #include <motioncam/Decoder.hpp>
 
 #include <cassert>
@@ -13,59 +14,63 @@
 #include <string>
 #include <vector>
 
-int main(int argc, char** argv) {
-    const std::string path =
-        argc > 1 ? argv[1] : std::string("gyro_interop.mcraw");
+namespace {
 
-    constexpr int width = 64, height = 8, stride = width * 2;
-    std::vector<uint8_t> raw(static_cast<size_t>(height - 1) * stride + width * 2, 0);
-    for (int y = 0; y < height; ++y)
-        for (int x = 0; x < width; ++x) {
-            const uint16_t v = static_cast<uint16_t>((x * 17 + y * 31) & 4095);
-            raw[static_cast<size_t>(y) * stride + x * 2] = static_cast<uint8_t>(v);
-            raw[static_cast<size_t>(y) * stride + x * 2 + 1] = static_cast<uint8_t>(v >> 8);
+constexpr int kWidth = 64;
+constexpr int kHeight = 8;
+constexpr int kStride = kWidth * 2;
+constexpr char kFrameJson[] = "{\"width\":64,\"height\":8,\"compressionType\":7}";
+
+std::vector<uint8_t> EncodeTestFrame() {
+    std::vector<uint8_t> raw(static_cast<size_t>(kHeight - 1) * kStride + kWidth * 2, 0);
+    for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x) {
+            const uint16_t value = static_cast<uint16_t>((x * 17 + y * 31) & 4095);
+            raw[static_cast<size_t>(y) * kStride + x * 2] = static_cast<uint8_t>(value);
+            raw[static_cast<size_t>(y) * kStride + x * 2 + 1] = static_cast<uint8_t>(value >> 8);
         }
     std::vector<uint8_t> blob;
-    mediacinemaraw::encode(raw.data(), raw.size(), width, height, stride,
-                           false, 0, height, false, blob);
+    mediacinemaraw::encode(raw.data(), raw.size(), kWidth, kHeight, kStride, false, 0, kHeight,
+                           false, blob);
+    return blob;
+}
 
-    {
-        mediacinemaraw::ContainerWriter writer(
-            path,
-            "{\"manufacturer\":\"Example\",\"model\":\"Camera 1\","
-            "\"UniqueCameraModel\":\"Example Camera 1\","
-            "\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":1}}");
-        writer.writeFrame(blob, 1000000000LL,
-                          "{\"width\":64,\"height\":8,\"compressionType\":7}");
-        writer.writeFrame(blob, 1033333333LL,
-                          "{\"width\":64,\"height\":8,\"compressionType\":7}");
-        const int16_t pcm[2] = {100, -200};
-        writer.writeAudio(pcm, 2, 1001000000LL);
-        mediacinemaraw::GyroSample chunk1[3] = {
-            {1002000000LL, 0.1f, -0.2f, 0.3f},
-            {1003000000LL, 1.0f, 2.0f, 3.0f},
-            {1004000000LL, -1.5f, 0.0f, 9.81f},
-        };
-        writer.writeGyro(chunk1, 3);
-        writer.writeGyro(chunk1, 0);  // no-op
-        mediacinemaraw::GyroSample chunk2[1] = {{1005000000LL, 4.0f, 5.0f, 6.0f}};
-        writer.writeGyro(chunk2, 1);
-        mediacinemaraw::AccelerometerSample accel1[2] = {
-            {1002500000LL, 0.0f, 9.81f, 0.0f},
-            {1003500000LL, 1.0f, 9.0f, -1.0f},
-        };
-        writer.writeAccelerometer(accel1, 2);
-        writer.writeAccelerometer(accel1, 0);  // no-op
-        mediacinemaraw::AccelerometerSample accel2[1] = {{1005500000LL, 0.5f, 9.5f, 0.25f}};
-        writer.writeAccelerometer(accel2, 1);
-        writer.close();
-        assert(writer.frameCount() == 2);
-    }
+void WriteBasicFile(const std::string& path, const std::vector<uint8_t>& frame) {
+    mediacinemaraw::ContainerWriter writer(
+        path, "{\"manufacturer\":\"Example\",\"model\":\"Camera 1\","
+              "\"UniqueCameraModel\":\"Example Camera 1\","
+              "\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":1}}");
+    writer.writeFrame(frame, 1000000000LL, kFrameJson);
+    writer.writeFrame(frame, 1033333333LL, kFrameJson);
+    const int16_t pcm[2] = {100, -200};
+    writer.writeAudio(pcm, 2, 1001000000LL);
+    mediacinemaraw::GyroSample gyroFirst[3] = {
+        {1002000000LL, 0.1f, -0.2f, 0.3f},
+        {1003000000LL, 1.0f, 2.0f, 3.0f},
+        {1004000000LL, -1.5f, 0.0f, 9.81f},
+    };
+    writer.writeGyro(gyroFirst, 3);
+    writer.writeGyro(gyroFirst, 0); // No-op.
+    mediacinemaraw::GyroSample gyroSecond[1] = {{1005000000LL, 4.0f, 5.0f, 6.0f}};
+    writer.writeGyro(gyroSecond, 1);
+    mediacinemaraw::AccelerometerSample accelFirst[2] = {
+        {1002500000LL, 0.0f, 9.81f, 0.0f},
+        {1003500000LL, 1.0f, 9.0f, -1.0f},
+    };
+    writer.writeAccelerometer(accelFirst, 2);
+    writer.writeAccelerometer(accelFirst, 0); // No-op.
+    mediacinemaraw::AccelerometerSample accelSecond[1] = {{1005500000LL, 0.5f, 9.5f, 0.25f}};
+    writer.writeAccelerometer(accelSecond, 1);
+    writer.close();
+    assert(writer.frameCount() == 2);
+}
 
+void CheckBasicFile(const std::string& path) {
     motioncam::Decoder decoder(path);
     assert(decoder.getFrames().size() == 2);
     assert(decoder.hasGyroData());
     assert(decoder.hasAccelerometerData());
+
     std::vector<motioncam::MotionSample> gyro;
     decoder.loadGyroData(gyro);
     assert(gyro.size() == 4);
@@ -78,6 +83,7 @@ int main(int argc, char** argv) {
     assert(std::fabs(gyro[2].z - 9.81f) < 1e-4f);
     assert(gyro[3].timestampNs == 1005000000LL);
     assert(std::fabs(gyro[3].x - 4.0f) < 1e-6f);
+
     std::vector<motioncam::MotionSample> accel;
     decoder.loadAccelerometerData(accel);
     assert(accel.size() == 3);
@@ -88,63 +94,70 @@ int main(int argc, char** argv) {
     assert(accel[2].timestampNs == 1005500000LL);
     assert(std::fabs(accel[2].x - 0.5f) < 1e-6f);
 
-    // Frames remain decodable alongside gyro.
-    for (auto ts : decoder.getFrames()) {
+    // Frames remain decodable alongside motion.
+    for (auto timestamp : decoder.getFrames()) {
         std::vector<uint8_t> data;
         nlohmann::json meta;
-        decoder.loadFrame(ts, data, meta);
+        decoder.loadFrame(timestamp, data, meta);
         assert(meta["width"] == 64 && meta["height"] == 8);
         assert(meta["compressionType"] == 7);
-        assert(data.size() == static_cast<size_t>(width * height * 2));
+        assert(data.size() == static_cast<size_t>(kWidth * kHeight * 2));
     }
-
     std::printf("upstream gyro+accel interop passed (4 gyro, 3 accel)\n");
+}
 
+void CheckCrowdedMotion(const std::vector<uint8_t>& frame) {
     // Many tiny drains (sensor recorders drain ~100x/s) must coalesce to
     // <= frames + 1 chunks: the upstream reader rejects more with
     // "Invalid gyro index", aborting the whole open.
-    const std::string many = "gyro_interop_many.mcraw";
-    int64_t sensorTs = 2000000000LL;
+    const std::string path = "gyro_interop_many.mcraw";
+    int64_t sensorNs = 2000000000LL;
     {
-        mediacinemaraw::ContainerWriter writer(many, "{}");
+        mediacinemaraw::ContainerWriter writer(path, "{}");
         for (int f = 0; f < 5; ++f) {
             for (int d = 0; d < 50; ++d) {
-                mediacinemaraw::GyroSample g[7];
-                mediacinemaraw::AccelerometerSample a[7];
+                mediacinemaraw::GyroSample gyro[7];
+                mediacinemaraw::AccelerometerSample accel[7];
                 for (int i = 0; i < 7; ++i) {
-                    g[i] = {sensorTs, 0.1f, -0.2f, 0.3f};
-                    a[i] = {sensorTs, 1.0f, 2.0f, 9.8f};
-                    sensorTs += 2000000LL;  // 500 Hz
+                    gyro[i] = {sensorNs, 0.1f, -0.2f, 0.3f};
+                    accel[i] = {sensorNs, 1.0f, 2.0f, 9.8f};
+                    sensorNs += 2000000LL; // 500 Hz.
                 }
-                writer.writeGyro(g, 7);
-                writer.writeAccelerometer(a, 7);
+                writer.writeGyro(gyro, 7);
+                writer.writeAccelerometer(accel, 7);
             }
-            writer.writeFrame(blob, 2000000000LL + int64_t(f) * 33333333LL,
-                              "{\"width\":64,\"height\":8,\"compressionType\":7}");
+            writer.writeFrame(frame, 2000000000LL + int64_t(f) * 33333333LL, kFrameJson);
         }
-        mediacinemaraw::GyroSample tail{0, 0, 0, 0};
-        tail.timestampNs = sensorTs;
-        writer.writeGyro(&tail, 1);
-        mediacinemaraw::AccelerometerSample tailA{0, 0, 0, 0};
-        tailA.timestampNs = sensorTs;
-        writer.writeAccelerometer(&tailA, 1);
+        mediacinemaraw::GyroSample gyroTail{sensorNs, 0, 0, 0};
+        writer.writeGyro(&gyroTail, 1);
+        mediacinemaraw::AccelerometerSample accelTail{sensorNs, 0, 0, 0};
+        writer.writeAccelerometer(&accelTail, 1);
         writer.close();
     }
-    motioncam::Decoder crowded(many);
+    motioncam::Decoder crowded(path);
     assert(crowded.getFrames().size() == 5);
-    std::vector<motioncam::MotionSample> cg, ca;
-    crowded.loadGyroData(cg);
-    crowded.loadAccelerometerData(ca);
-    assert(cg.size() == 5 * 50 * 7 + 1);
-    assert(ca.size() == 5 * 50 * 7 + 1);
-    assert(cg.front().timestampNs == 2000000000LL);
-    assert(cg.back().timestampNs == sensorTs);
-    assert(ca.front().timestampNs == 2000000000LL);
-    assert(ca.back().timestampNs == sensorTs);
-    for (size_t i = 1; i < cg.size(); ++i)
-        assert(cg[i].timestampNs >= cg[i - 1].timestampNs);
-    std::remove(many.c_str());
-
+    std::vector<motioncam::MotionSample> gyro, accel;
+    crowded.loadGyroData(gyro);
+    crowded.loadAccelerometerData(accel);
+    assert(gyro.size() == 5 * 50 * 7 + 1);
+    assert(accel.size() == 5 * 50 * 7 + 1);
+    assert(gyro.front().timestampNs == 2000000000LL);
+    assert(gyro.back().timestampNs == sensorNs);
+    assert(accel.front().timestampNs == 2000000000LL);
+    assert(accel.back().timestampNs == sensorNs);
+    for (size_t i = 1; i < gyro.size(); ++i)
+        assert(gyro[i].timestampNs >= gyro[i - 1].timestampNs);
+    std::remove(path.c_str());
     std::printf("upstream crowded-motion interop passed (1751 + 1751)\n");
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::string path = argc > 1 ? argv[1] : std::string("gyro_interop.mcraw");
+    const std::vector<uint8_t> frame = EncodeTestFrame();
+    WriteBasicFile(path, frame);
+    CheckBasicFile(path);
+    CheckCrowdedMotion(frame);
     return 0;
 }
