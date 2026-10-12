@@ -614,15 +614,45 @@ void TestPerFrameMotionCoalescing() {
 }
 
 void TestLensShadingJson() {
-    // Golden text: gains use exactly-representable values so %.9g prints
-    // without trailing digits.
+    // Golden text in the MotionCam frame shape: nested R/Gr/Gb/B planes.
+    // Gains use exactly-representable values so %.9g prints without
+    // trailing digits.
     mediacinemaraw::LensShadingMap map;
     map.columns = 2;
     map.rows = 1;
     map.gains = {1.0f, 1.5f, 2.0f, 2.5f, 0.5f, 1.25f, 3.0f, 4.0f};
     const std::string json = mediacinemaraw::buildLensShadingJson(map);
-    assert(json == "\"lensShadingMap\":{\"columns\":2,\"rows\":1,\"gains\":"
-                   "[1,1.5,2,2.5,0.5,1.25,3,4]}");
+    assert(json == "\"lensShadingMapWidth\":2,\"lensShadingMapHeight\":1,"
+                   "\"lensShadingMap\":[[1,0.5],[1.5,1.25],[2,3],[2.5,4]]");
+
+    // Pixel-to-color mapping for every Bayer arrangement: R is 0, B is 3,
+    // green in an R row is Gr (1), in a B row Gb (2).
+    assert(mediacinemaraw::lensShadingChannelIndex("rggb", 0, 0) == 0);
+    assert(mediacinemaraw::lensShadingChannelIndex("rggb", 1, 0) == 1);
+    assert(mediacinemaraw::lensShadingChannelIndex("rggb", 0, 1) == 2);
+    assert(mediacinemaraw::lensShadingChannelIndex("rggb", 1, 1) == 3);
+    assert(mediacinemaraw::lensShadingChannelIndex("bggr", 0, 0) == 3);
+    assert(mediacinemaraw::lensShadingChannelIndex("bggr", 1, 0) == 2);
+    assert(mediacinemaraw::lensShadingChannelIndex("bggr", 0, 1) == 1);
+    assert(mediacinemaraw::lensShadingChannelIndex("bggr", 1, 1) == 0);
+    assert(mediacinemaraw::lensShadingChannelIndex("grbg", 0, 0) == 1);
+    assert(mediacinemaraw::lensShadingChannelIndex("grbg", 1, 0) == 0);
+    assert(mediacinemaraw::lensShadingChannelIndex("grbg", 0, 1) == 3);
+    assert(mediacinemaraw::lensShadingChannelIndex("grbg", 1, 1) == 2);
+    assert(mediacinemaraw::lensShadingChannelIndex("gbrg", 0, 0) == 2);
+    assert(mediacinemaraw::lensShadingChannelIndex("gbrg", 1, 0) == 3);
+    assert(mediacinemaraw::lensShadingChannelIndex("gbrg", 0, 1) == 0);
+    assert(mediacinemaraw::lensShadingChannelIndex("gbrg", 1, 1) == 1);
+    assert(mediacinemaraw::lensShadingChannelIndex("rggb", -1, 0) == 1);
+    for (const char* bad : {"", "RGGB", "rgg", "rgbg", "xxxx"}) {
+        bool threw = false;
+        try {
+            mediacinemaraw::lensShadingChannelIndex(bad, 0, 0);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        assert(threw);
+    }
 
     // Sampling over a 4x2 frame: grid points sit at pixel centers x = 1, 3,
     // so the outer columns clamp to the edge samples exactly.
@@ -679,12 +709,12 @@ void TestLensShadingJson() {
     }
     assert(threw);
 
-    // The pair splices into the container JSON and survives a container
+    // The triplet splices into the frame JSON and survives a container
     // round-trip byte-for-byte.
     {
-        mediacinemaraw::ContainerWriter writer(kScratchContainer,
-                                               "{\"model\":\"Camera 1\"," + json + "}");
-        writer.writeFrame(EncodeGradient(), 1000000000LL, kFrameJson);
+        mediacinemaraw::ContainerWriter writer(kScratchContainer, "{\"model\":\"Camera 1\"}");
+        writer.writeFrame(EncodeGradient(), 1000000000LL,
+                          "{\"width\":64,\"height\":8,\"compressionType\":7," + json + "}");
         writer.close();
     }
     {

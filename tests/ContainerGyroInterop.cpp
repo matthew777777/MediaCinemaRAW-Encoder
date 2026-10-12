@@ -153,11 +153,10 @@ void CheckCrowdedMotion(const std::vector<uint8_t>& frame) {
 }
 
 void CheckLensShading(const std::vector<uint8_t>& frame) {
-    // A container-level map from buildLensShadingJson() must survive the
-    // upstream oracle: motioncam-decoder exposes the container JSON
-    // untouched, so the map reads back value-for-value while frames and
-    // audio still load. Gains are exactly representable, so the upstream
-    // doubles compare exactly.
+    // A per-frame map from buildLensShadingJson() must survive the upstream
+    // oracle: motioncam-decoder exposes frame JSON untouched, so the nested
+    // planes read back value-for-value. Gains are exactly representable,
+    // so the upstream doubles compare exactly.
     const std::string path = "gyro_interop_lens.mcraw";
     mediacinemaraw::LensShadingMap map;
     map.columns = 4;
@@ -165,66 +164,78 @@ void CheckLensShading(const std::vector<uint8_t>& frame) {
     map.gains.resize(48);
     for (size_t i = 0; i < map.gains.size(); ++i)
         map.gains[i] = 1.0f + float(i % 8) * 0.25f;
-    const std::string container = "{\"manufacturer\":\"Example\",\"model\":\"Camera 1\"," +
-                                  mediacinemaraw::buildLensShadingJson(map) +
-                                  ",\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":1}}";
+    const std::string frameJson = "{\"width\":64,\"height\":8,\"compressionType\":7," +
+                                  mediacinemaraw::buildLensShadingJson(map) + "}";
     {
-        mediacinemaraw::ContainerWriter writer(path, container);
-        writer.writeFrame(frame, 1000000000LL, kFrameJson);
+        mediacinemaraw::ContainerWriter writer(
+            path, "{\"manufacturer\":\"Example\",\"model\":\"Camera 1\","
+                  "\"UniqueCameraModel\":\"Example Camera 1\","
+                  "\"extraData\":{\"audioSampleRate\":48000,\"audioChannels\":1}}");
+        writer.writeFrame(frame, 1000000000LL, frameJson);
         const int16_t pcm[2] = {100, -200};
         writer.writeAudio(pcm, 2, 1001000000LL);
         writer.close();
     }
     motioncam::Decoder decoder(path);
-    const nlohmann::json& meta = decoder.getContainerMetadata();
-    assert(meta["lensShadingMap"]["columns"] == 4);
-    assert(meta["lensShadingMap"]["rows"] == 3);
-    const nlohmann::json& gains = meta["lensShadingMap"]["gains"];
-    assert(gains.size() == 48);
-    for (size_t i = 0; i < gains.size(); ++i)
-        assert(gains[i].get<double>() == 1.0 + double(i % 8) * 0.25);
     assert(decoder.getFrames().size() == 1);
     std::vector<uint8_t> data;
-    nlohmann::json frameMeta;
-    decoder.loadFrame(decoder.getFrames()[0], data, frameMeta);
-    assert(frameMeta["compressionType"] == 7);
+    nlohmann::json meta;
+    decoder.loadFrame(decoder.getFrames()[0], data, meta);
+    assert(meta["lensShadingMapWidth"] == 4);
+    assert(meta["lensShadingMapHeight"] == 3);
+    const nlohmann::json& planes = meta["lensShadingMap"];
+    assert(planes.size() == 4);
+    for (size_t ch = 0; ch < 4; ++ch) {
+        assert(planes[ch].size() == 12);
+        for (size_t i = 0; i < 12; ++i)
+            assert(planes[ch][i].get<double>() == 1.0 + double((i * 4 + ch) % 8) * 0.25);
+    }
+    assert(meta["compressionType"] == 7);
     assert(data.size() == static_cast<size_t>(kWidth * kHeight * 2));
     std::vector<motioncam::AudioChunk> audio;
     decoder.loadAudio(audio);
     assert(audio.size() == 1 && audio[0].second.size() == 2);
     assert(decoder.audioSampleRateHz() == 48000);
     std::remove(path.c_str());
-    std::printf("upstream lens shading interop passed (4x3 map, 48 gains)\n");
+    std::printf("upstream lens shading interop passed (4x3 map, 4x12 gains)\n");
 }
 
 void CheckLargeLensShading(const std::vector<uint8_t>& frame) {
-    // A realistic-size sensor map (64x48, ~100 KB of JSON) must pass
-    // through the upstream reader the same way: no metadata size cap.
+    // A realistic-size sensor map (17x17 nested planes, as MotionCam Pro
+    // writes) must pass through the upstream reader the same way: no
+    // metadata size cap.
     const std::string path = "gyro_interop_lens_big.mcraw";
     mediacinemaraw::LensShadingMap map;
-    map.columns = 64;
-    map.rows = 48;
-    map.gains.resize(static_cast<size_t>(64) * 48 * 4, 1.5f);
-    map.gains.front() = 1.0f;
+    map.columns = 17;
+    map.rows = 17;
+    map.gains.resize(static_cast<size_t>(17) * 17 * 4, 1.5f);
+    for (int ch = 0; ch < 4; ++ch)
+        map.gains[size_t(ch)] = 1.0f + float(ch) * 0.5f;
     map.gains.back() = 2.5f;
+    const std::string frameJson = "{\"width\":64,\"height\":8,\"compressionType\":7," +
+                                  mediacinemaraw::buildLensShadingJson(map) + "}";
     {
-        mediacinemaraw::ContainerWriter writer(
-            path, "{\"model\":\"Camera 1\"," + mediacinemaraw::buildLensShadingJson(map) + "}");
-        writer.writeFrame(frame, 1000000000LL, kFrameJson);
+        mediacinemaraw::ContainerWriter writer(path, "{\"model\":\"Camera 1\"}");
+        writer.writeFrame(frame, 1000000000LL, frameJson);
         writer.close();
     }
     motioncam::Decoder decoder(path);
-    const nlohmann::json& meta = decoder.getContainerMetadata();
-    assert(meta["lensShadingMap"]["columns"] == 64);
-    assert(meta["lensShadingMap"]["rows"] == 48);
-    const nlohmann::json& gains = meta["lensShadingMap"]["gains"];
-    assert(gains.size() == static_cast<size_t>(64) * 48 * 4);
-    assert(gains[0].get<double>() == 1.0);
-    assert(gains[100].get<double>() == 1.5);
-    assert(gains[gains.size() - 1].get<double>() == 2.5);
     assert(decoder.getFrames().size() == 1);
+    std::vector<uint8_t> data;
+    nlohmann::json meta;
+    decoder.loadFrame(decoder.getFrames()[0], data, meta);
+    assert(meta["lensShadingMapWidth"] == 17);
+    assert(meta["lensShadingMapHeight"] == 17);
+    const nlohmann::json& planes = meta["lensShadingMap"];
+    assert(planes.size() == 4);
+    for (size_t ch = 0; ch < 4; ++ch) {
+        assert(planes[ch].size() == 289);
+        assert(planes[ch][0].get<double>() == 1.0 + double(ch) * 0.5);
+        assert(planes[ch][100].get<double>() == 1.5);
+    }
+    assert(planes[3][288].get<double>() == 2.5);
     std::remove(path.c_str());
-    std::printf("upstream large lens shading interop passed (64x48 map)\n");
+    std::printf("upstream large lens shading interop passed (17x17 map)\n");
 }
 
 } // namespace

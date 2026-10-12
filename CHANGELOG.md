@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- Added header-only `LensShading.h`: `buildLensShadingJson()` embeds one
-  container-level `lensShadingMap` gain grid for lens shading correction,
-  with validation and bilinear sampling shared with the sibling decoder.
-  The upstream-oracle interop suite reads 4x3 and 64x48 maps back through
-  motioncam-decoder value-for-value.
+- Added header-only `LensShading.h`: `buildLensShadingJson()` embeds a
+  per-frame `lensShadingMapWidth` / `lensShadingMapHeight` / `lensShadingMap`
+  gain grid (four nested R/Gr/Gb/B planes, the MotionCam Pro shape) for lens
+  shading correction, with validation, CFA channel mapping, and bilinear
+  sampling shared with the sibling decoder. The upstream-oracle interop
+  suite reads 4x3 and 17x17 maps back through motioncam-decoder
+  value-for-value, and MotionCam Tools renders files using this output.
 - Restructured the codebase without changing the wire format: encoder
   internals moved to documented `src/detail/` modules (SIMD, bit packing,
   tile loop, container constants), public headers documented, validation

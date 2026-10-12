@@ -91,10 +91,12 @@ to DNG tag 50708 instead of assigning a fixed application name. For compatibilit
 with readers that follow lower-camel JSON naming, PhotonCamera also emits the
 same value as `uniqueCameraModel`.
 
-Use `mediacinemaraw::buildLensShadingJson()` to embed one container-level
-`lensShadingMap` gain grid for vignetting correction. The map must cover the
-encoded (post-crop, post-binning) frame geometry. See `LensShading.h` for the
-schema and the DNG GainMap mapping.
+Use `mediacinemaraw::buildLensShadingJson()` to embed a per-frame
+`lensShadingMapWidth` / `lensShadingMapHeight` / `lensShadingMap` gain grid
+for vignetting correction, in the same shape MotionCam Pro writes (four
+nested R/Gr/Gb/B planes), so MotionCam Tools applies it. The map must cover
+the encoded (post-crop, post-binning) frame geometry. See `LensShading.h`
+for the schema.
 
 ## Layout
 

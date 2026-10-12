@@ -85,17 +85,19 @@ Both repos are `GPL-3.0-only`.
 
 ## How does lens shading correction work?
 
-The container JSON may carry one `lensShadingMap` object: a coarse
-`columns` x `rows` grid of per-channel gains that correct vignetting and
-lens falloff. Gains are row-major with four channel-interleaved values per
-grid point, indexed by CFA tile position (`(y % 2) * 2 + (x % 2)`); the
-decoder bilinearly interpolates them over the frame and applies
+Each frame JSON may carry `lensShadingMapWidth`, `lensShadingMapHeight`,
+and `lensShadingMap`: a coarse gain grid correcting vignetting and lens
+falloff, in the same shape MotionCam Pro writes — four nested planes, one
+per color channel (R, Gr, Gb, B), each `Width x Height` row-major gains.
+Pixels map to planes through `sensorArrangment`; the decoder bilinearly
+interpolates the grid over the frame and applies
 `black + (pixel - black) * gain`. The map covers the encoded (post-crop,
 post-binning) frame geometry. The encoder embeds it with
 `buildLensShadingJson()`, the decoder reads it with
 `parseLensShadingMap()` and applies it with `applyLensShadingMap()` (all in
-`LensShading.h`), and `motioncam-decoder` readers see the same plain JSON
-keys through `nlohmann::json`.
+`LensShading.h`). MotionCam Tools and `motioncam-decoder` readers see the
+same plain JSON keys; Tools applies the map when rendering, and ignores a
+missing or malformed map.
 
 ## My file plays badly / has no audio / looks dark. Is it broken?
 

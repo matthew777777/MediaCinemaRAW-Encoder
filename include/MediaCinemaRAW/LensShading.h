@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Container-level lens shading metadata for `.mcraw` clips: a coarse
-// per-channel gain grid that corrects vignetting and lens falloff.
+// Frame-level lens shading metadata, compatible with MotionCam Pro files
+// and MotionCam Tools: a per-frame gain grid correcting vignetting.
 //
-// Schema. The container JSON may carry one `lensShadingMap` object with
-// plain keys, so motioncam-decoder readers consume it through
-// nlohmann::json with no new dependency:
+// Schema. Each frame JSON may carry three keys (verified against
+// MotionCam Pro recordings and the MotionCam Tools renderer, which reads
+// them and bakes the correction into its DNG output):
 //
-//   "lensShadingMap": {"columns": 16, "rows": 12, "gains": [...]}
+//   "lensShadingMapWidth": 17, "lensShadingMapHeight": 13,
+//   "lensShadingMap": [[R...], [Gr...], [Gb...], [B...]]
 //
-// `columns`/`rows` are positive grid extents (at most 512 each). `gains`
-// holds exactly `columns * rows * 4` finite floats, each greater than zero,
-// in row-major order with four channel-interleaved gains per grid point:
-// index `(r * columns + c) * 4 + ch`, where `ch = (y % 2) * 2 + (x % 2)`
-// is the CFA tile position of the pixel. For `sensorArrangment "rggb"` the
-// channels are R, Gr, Gb, B in tile order. This matches the DNG GainMap
-// opcode sample order (MapPointsV x MapPointsH x MapPlanes), so DNG
-// exporters can copy `gains` into the opcode verbatim with map_planes 4,
-// spacing (width / columns, height / rows), and origin
-// (0.5 * width / columns, 0.5 * height / rows).
+// `lensShadingMap` holds exactly four nested planes, one per color
+// channel in Android color order: 0 = R, 1 = Gr (green in R rows),
+// 2 = Gb (green in B rows), 3 = B. Each plane holds exactly
+// `Width * Height` row-major finite floats, each greater than zero.
+// This is NOT CFA tile order: pixels map to planes through the
+// `sensorArrangment` value (`"rggb"`, `"bggr"`, `"grbg"`, or `"gbrg"`).
+// MotionCam Tools ignores a missing or malformed map (flat arrays,
+// strings, and ragged planes all render as if absent — verified), so
+// files without these keys keep working everywhere.
 //
 // Geometry. Grid point (c, r) sits at pixel-center coordinates
 // `x = (c + 0.5) * width / columns`, `y = (r + 0.5) * height / rows`,
@@ -31,16 +31,17 @@
 // are cropped (`cropTop`/`cropHeight`) or 4x-downscaled, the producer must
 // crop or resample the sensor shading map to the encoded window before
 // embedding it; the decoder always applies the map over the decoded
-// width x height.
+// width x height. Android producers can copy `LensShadingMap` channels
+// directly: the plane order matches.
 //
 // Correction. The decoder applies
 // `out = black + (in - black) * gain`, rounded to nearest and clamped to
 // [0, 65535]. Black handling lives on the apply side; see the sibling
 // decoder's `applyLensShadingMap()`.
 //
-// The shared section below (the struct, validation, and sampling) is
-// duplicated in the sibling decoder repository, which must not depend on
-// this one. Keep the two copies in sync.
+// The shared section below (the struct, validation, channel mapping, and
+// sampling) is duplicated in the sibling decoder repository, which must
+// not depend on this one. Keep the two copies in sync.
 #pragma once
 
 #include <clocale>
@@ -53,8 +54,9 @@
 
 namespace mediacinemaraw {
 
-// Coarse per-channel gain grid covering one encoded frame. See the schema
-// above for the `gains` layout.
+// Coarse per-channel gain grid covering one encoded frame: `columns` by
+// `rows` grid points with four color-interleaved gains each, index
+// `(r * columns + c) * 4 + ch`, channel order R, Gr, Gb, B.
 struct LensShadingMap {
     int columns = 0;
     int rows = 0;
@@ -63,8 +65,8 @@ struct LensShadingMap {
 
 namespace lensshading_detail {
 
-// Grid backstop: 512 x 512 x 4 gains stay under typical container sizes
-// while real sensor maps are an order of magnitude smaller.
+// Grid backstop: 512 x 512 x 4 gains stay under typical frame metadata
+// sizes while real sensor maps are an order of magnitude smaller.
 constexpr int kMaxGridExtent = 512;
 
 // Unchecked bilinear sample. The caller must have validated the map,
@@ -136,9 +138,29 @@ inline void validateLensShadingMap(const LensShadingMap& map) {
     }
 }
 
-// Samples one channel gain at pixel (x, y) of a width x height frame.
-// `channel` is the CFA tile position `(y % 2) * 2 + (x % 2)`; callers that
-// already know the pixel's channel pass it directly. Validates the map and
+// Maps pixel (x, y) to its color channel index (0 = R, 1 = Gr, 2 = Gb,
+// 3 = B) through the 2x2 CFA tile named by `sensorArrangement`, one of
+// `"rggb"`, `"bggr"`, `"grbg"`, `"gbrg"` (lowercase, as MotionCam writes
+// it). A green pixel in an R row is Gr, in a B row Gb. Only the pixel
+// parity matters. Throws std::invalid_argument on any other arrangement.
+inline int lensShadingChannelIndex(const std::string& sensorArrangement, int x, int y) {
+    if (sensorArrangement != "rggb" && sensorArrangement != "bggr" && sensorArrangement != "grbg" &&
+        sensorArrangement != "gbrg")
+        throw std::invalid_argument("lens shading sensor arrangement");
+    const int tx = ((x % 2) + 2) % 2;
+    const int ty = ((y % 2) + 2) % 2;
+    const char color = sensorArrangement[size_t(ty) * 2 + size_t(tx)];
+    if (color == 'r')
+        return 0;
+    if (color == 'b')
+        return 3;
+    const bool rowHasRed =
+        sensorArrangement[size_t(ty) * 2] == 'r' || sensorArrangement[size_t(ty) * 2 + 1] == 'r';
+    return rowHasRed ? 1 : 2;
+}
+
+// Samples one color-channel gain at pixel (x, y) of a width x height
+// frame; `channel` is 0 = R, 1 = Gr, 2 = Gb, 3 = B. Validates the map and
 // throws std::invalid_argument like validateLensShadingMap(), plus on bad
 // geometry, out-of-range coordinates, or a channel outside [0, 3].
 inline float lensShadingGainAt(const LensShadingMap& map, int x, int y, int width, int height,
@@ -153,40 +175,49 @@ inline float lensShadingGainAt(const LensShadingMap& map, int x, int y, int widt
     return lensshading_detail::SampleGain(map, x, y, width, height, channel);
 }
 
-// Serializes a map to the `"lensShadingMap": {...}` pair for splicing into
-// the container JSON, e.g. `"{\"model\":\"X\"," + buildLensShadingJson(map)
-// + "}"`. Gains print with %.9g, which round-trips float32 exactly, and
-// always with a '.' decimal point regardless of the C numeric locale.
-// Validates first and throws like validateLensShadingMap().
+// Serializes a map to the `"lensShadingMapWidth": ..., ...` triplet for
+// splicing into the frame JSON, e.g. `"{\"width\":64,...," +
+// buildLensShadingJson(map) + "}"`. Gains print with %.9g, which
+// round-trips float32 exactly, and always with a '.' decimal point
+// regardless of the C numeric locale. Validates first and throws like
+// validateLensShadingMap().
 inline std::string buildLensShadingJson(const LensShadingMap& map) {
     validateLensShadingMap(map);
     const char* separator = std::localeconv()->decimal_point;
     const bool fixSeparator = separator != nullptr && separator[0] != '\0' &&
                               !(separator[0] == '.' && separator[1] == '\0');
-    std::string out = "\"lensShadingMap\":{\"columns\":";
+    std::string out = "\"lensShadingMapWidth\":";
     out += std::to_string(map.columns);
-    out += ",\"rows\":";
+    out += ",\"lensShadingMapHeight\":";
     out += std::to_string(map.rows);
-    out += ",\"gains\":[";
+    out += ",\"lensShadingMap\":[";
     out.reserve(out.size() + map.gains.size() * 12);
     char text[32];
-    for (size_t i = 0; i < map.gains.size(); ++i) {
-        if (i != 0)
+    const size_t plane = static_cast<size_t>(map.columns) * static_cast<size_t>(map.rows);
+    for (int ch = 0; ch < 4; ++ch) {
+        if (ch != 0)
             out += ',';
-        std::snprintf(text, sizeof(text), "%.9g", static_cast<double>(map.gains[i]));
-        if (fixSeparator) {
-            // %.9g never emits grouping separators, so at most one decimal
-            // point needs rewriting to the JSON '.'.
-            std::string token = text;
-            const size_t found = token.find(separator);
-            if (found != std::string::npos)
-                token.replace(found, std::strlen(separator), ".");
-            out += token;
-        } else {
-            out += text;
+        out += '[';
+        for (size_t i = 0; i < plane; ++i) {
+            if (i != 0)
+                out += ',';
+            std::snprintf(text, sizeof(text), "%.9g",
+                          static_cast<double>(map.gains[i * 4 + size_t(ch)]));
+            if (fixSeparator) {
+                // %.9g never emits grouping separators, so at most one
+                // decimal point needs rewriting to the JSON '.'.
+                std::string token = text;
+                const size_t found = token.find(separator);
+                if (found != std::string::npos)
+                    token.replace(found, std::strlen(separator), ".");
+                out += token;
+            } else {
+                out += text;
+            }
         }
+        out += ']';
     }
-    out += "]}";
+    out += "]";
     return out;
 }
 
