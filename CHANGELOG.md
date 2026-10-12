@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added header-only `LensShading.h`: `buildLensShadingJson()` embeds one
+  container-level `lensShadingMap` gain grid for lens shading correction,
+  with validation and bilinear sampling shared with the sibling decoder.
+  The upstream-oracle interop suite reads 4x3 and 64x48 maps back through
+  motioncam-decoder value-for-value.
 - Restructured the codebase without changing the wire format: encoder
   internals moved to documented `src/detail/` modules (SIMD, bit packing,
   tile loop, container constants), public headers documented, validation

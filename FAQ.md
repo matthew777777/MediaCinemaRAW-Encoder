@@ -83,6 +83,20 @@ Both repos are `GPL-3.0-only`.
 - Frame timestamps use one nanosecond timeline (for example 33,333,333 ns at
   30 fps) and are strictly increasing.
 
+## How does lens shading correction work?
+
+The container JSON may carry one `lensShadingMap` object: a coarse
+`columns` x `rows` grid of per-channel gains that correct vignetting and
+lens falloff. Gains are row-major with four channel-interleaved values per
+grid point, indexed by CFA tile position (`(y % 2) * 2 + (x % 2)`); the
+decoder bilinearly interpolates them over the frame and applies
+`black + (pixel - black) * gain`. The map covers the encoded (post-crop,
+post-binning) frame geometry. The encoder embeds it with
+`buildLensShadingJson()`, the decoder reads it with
+`parseLensShadingMap()` and applies it with `applyLensShadingMap()` (all in
+`LensShading.h`), and `motioncam-decoder` readers see the same plain JSON
+keys through `nlohmann::json`.
+
 ## My file plays badly / has no audio / looks dark. Is it broken?
 
 Usually not:

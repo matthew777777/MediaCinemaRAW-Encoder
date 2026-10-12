@@ -91,9 +91,15 @@ to DNG tag 50708 instead of assigning a fixed application name. For compatibilit
 with readers that follow lower-camel JSON naming, PhotonCamera also emits the
 same value as `uniqueCameraModel`.
 
+Use `mediacinemaraw::buildLensShadingJson()` to embed one container-level
+`lensShadingMap` gain grid for vignetting correction. The map must cover the
+encoded (post-crop, post-binning) frame geometry. See `LensShading.h` for the
+schema and the DNG GainMap mapping.
+
 ## Layout
 
-- `include/MediaCinemaRAW/` — public headers (`Encoder.h`, `ContainerWriter.h`)
+- `include/MediaCinemaRAW/` — public headers (`Encoder.h`, `ContainerWriter.h`,
+  header-only `LensShading.h`)
 - `src/` — `Encoder.cpp`, `ContainerWriter.cpp`, plus private `detail/`
   internals (SIMD helpers, bit packing, tile loop, container constants)
 - `tests/` — self-contained validation suite plus upstream interop drivers

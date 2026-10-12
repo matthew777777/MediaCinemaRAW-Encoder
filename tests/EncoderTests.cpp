@@ -7,13 +7,16 @@
 // any change in output bytes fails here first.
 #include <MediaCinemaRAW/ContainerWriter.h>
 #include <MediaCinemaRAW/Encoder.h>
+#include <MediaCinemaRAW/LensShading.h>
 
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -610,6 +613,87 @@ void TestPerFrameMotionCoalescing() {
     std::remove(kScratchContainer);
 }
 
+void TestLensShadingJson() {
+    // Golden text: gains use exactly-representable values so %.9g prints
+    // without trailing digits.
+    mediacinemaraw::LensShadingMap map;
+    map.columns = 2;
+    map.rows = 1;
+    map.gains = {1.0f, 1.5f, 2.0f, 2.5f, 0.5f, 1.25f, 3.0f, 4.0f};
+    const std::string json = mediacinemaraw::buildLensShadingJson(map);
+    assert(json == "\"lensShadingMap\":{\"columns\":2,\"rows\":1,\"gains\":"
+                   "[1,1.5,2,2.5,0.5,1.25,3,4]}");
+
+    // Sampling over a 4x2 frame: grid points sit at pixel centers x = 1, 3,
+    // so the outer columns clamp to the edge samples exactly.
+    assert(mediacinemaraw::lensShadingGainAt(map, 0, 0, 4, 2, 0) == 1.0f);
+    assert(mediacinemaraw::lensShadingGainAt(map, 0, 1, 4, 2, 2) == 2.0f);
+    assert(mediacinemaraw::lensShadingGainAt(map, 3, 0, 4, 2, 1) == 1.25f);
+    assert(mediacinemaraw::lensShadingGainAt(map, 3, 1, 4, 2, 3) == 4.0f);
+    // Interior column x = 1 interpolates a quarter of the way across:
+    // 1.5 * 0.75 + 1.25 * 0.25 = 1.4375.
+    const float mid = mediacinemaraw::lensShadingGainAt(map, 1, 0, 4, 2, 1);
+    assert(std::fabs(mid - 1.4375f) < 1e-6f);
+
+    // Validation rejects bad maps; the builder throws the same way.
+    const std::vector<mediacinemaraw::LensShadingMap> bad = {
+        {0, 1, {1.0f, 1.0f, 1.0f, 1.0f}},            // No columns.
+        {1, 0, {1.0f, 1.0f, 1.0f, 1.0f}},            // No rows.
+        {513, 1, std::vector<float>(513 * 4, 1.0f)}, // Too wide.
+        {2, 1, {1.0f, 1.0f, 1.0f}},                  // Short gains.
+        {1, 1, {1.0f, 1.0f, 1.0f, std::numeric_limits<float>::quiet_NaN()}},
+        {1, 1, {1.0f, 1.0f, 1.0f, 0.0f}}, // Not positive.
+        {1, 1, {1.0f, 1.0f, 1.0f, -2.0f}},
+    };
+    for (const auto& badMap : bad) {
+        bool threw = false;
+        try {
+            mediacinemaraw::validateLensShadingMap(badMap);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        assert(threw);
+        threw = false;
+        try {
+            mediacinemaraw::buildLensShadingJson(badMap);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        assert(threw);
+    }
+    // Sampler guards: bad channel, coordinates, and dimensions.
+    for (int badChannel : {-1, 4}) {
+        bool threw = false;
+        try {
+            mediacinemaraw::lensShadingGainAt(map, 0, 0, 4, 2, badChannel);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        assert(threw);
+    }
+    bool threw = false;
+    try {
+        mediacinemaraw::lensShadingGainAt(map, 4, 0, 4, 2, 0);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    assert(threw);
+
+    // The pair splices into the container JSON and survives a container
+    // round-trip byte-for-byte.
+    {
+        mediacinemaraw::ContainerWriter writer(kScratchContainer,
+                                               "{\"model\":\"Camera 1\"," + json + "}");
+        writer.writeFrame(EncodeGradient(), 1000000000LL, kFrameJson);
+        writer.close();
+    }
+    {
+        const std::string bytes = ReadWholeFile(kScratchContainer);
+        assert(bytes.find(json) != std::string::npos);
+    }
+    std::remove(kScratchContainer);
+}
+
 } // namespace
 
 int main() {
@@ -633,6 +717,8 @@ int main() {
     std::puts("motion container round-trip passed");
     TestPerFrameMotionCoalescing();
     std::puts("per-frame motion coalescing passed");
+    TestLensShadingJson();
+    std::puts("lens shading json passed");
     std::puts("all encoder validation suites passed");
     return 0;
 }
